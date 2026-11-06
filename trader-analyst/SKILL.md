@@ -1,123 +1,92 @@
 ---
 name: trader-analyst
 description: >-
-  The Earnings Analyst. Reads a company's reported numbers straight from SEC
-  EDGAR (XBRL company facts from its 10-Qs and 10-Ks, plus the latest earnings
-  8-K and its press release) and sums up what changed: revenue, gross,
-  operating and net margins, net income and diluted EPS, quarter by quarter,
-  each against the same quarter a year earlier, with the trailing twelve
-  months. Reads an earnings call transcript when you paste one. Use when the
-  user says "how did Tesla's earnings look", "analyze the earnings", "what
-  changed this quarter", "is revenue growing", "check the 10-Q", "compare
-  margins", "sum up the call", "does it report this week", or before trading
-  a stock around its earnings.
-argument-hint: "[tickers]"
+  Earnings Analyst for NSE-listed companies. Reads the quarterly results a
+  company files with NSE (the XBRL of SEBI's integrated filing, and the
+  older results filings) and sums up what changed: revenue from operations,
+  EBITDA and net margins, net profit and the owners' share of it, basic EPS,
+  growth against the same quarter a year earlier and the quarter before, and
+  the last four quarters added up. Consolidated by default, standalone on
+  request, amounts in ₹ crore. Use when the user says "how were TCS's
+  results", "Q2 results", "quarterly results", "earnings for RELIANCE", "did
+  profit grow", "EPS", "margins", "compare INFY and TCS results", or before
+  holding a stock through its results.
+argument-hint: "SYMBOL [SYMBOL ...] [--standalone] [--quarters N]"
 ---
 
 # trader-analyst
 
-Earnings move stocks more than anything else on the calendar, and the press
-release is written to put the best number first. This skill reads the numbers
-the company actually filed with the SEC, lines them up quarter by quarter, and
-says plainly what changed. For a day trader it answers two questions before a
-trade: what did the last report say, and is the next one inside this trade?
+The Earnings Analyst reads the numbers a company filed with the exchange and
+says what changed. It does not say whether the stock is a buy. Results move
+stocks in India, often during market hours, so a day trader wants to know
+when they are due and what the last ones said.
 
-Tool in this folder (standard library Python, no keys):
+`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/facts.py" --help
+python3 "${CLAUDE_SKILL_DIR}/facts.py" RELIANCE
+python3 "${CLAUDE_SKILL_DIR}/facts.py" TCS INFY --quarters 6
+python3 "${CLAUDE_SKILL_DIR}/facts.py" HDFCBANK --standalone
+python3 "${CLAUDE_SKILL_DIR}/facts.py" RELIANCE --json
+python3 "${CLAUDE_SKILL_DIR}/facts.py" RELIANCE TCS INFY ITC --metrics trader/metrics.json
 ```
 
-It needs the SEC User-Agent (`sec_user_agent` in `trader/config.json`, or
-`SEC_USER_AGENT`): "Your Name you@example.com" with the user's real name and
-email. It refuses to call SEC without one.
+## Sources
 
-## What it reads and writes
+- `https://www.nseindia.com/api/integrated-filing-results?index=equities&symbol=SYMBOL`:
+  the "Integrated Filing - Financials" list (SEBI's integrated filing,
+  since early 2025), one row per filing with its XBRL link.
+- `https://www.nseindia.com/api/corporates-financial-results?index=equities&symbol=SYMBOL&period=Quarterly`:
+  the older results filings, used only for quarters the first list lacks
+  (so a year-ago comparison still works).
+- `https://nsearchives.nseindia.com/corporate/xbrl/...xml`: the filing.
 
-- Reads `https://data.sec.gov/api/xbrl/companyfacts/CIK##########.json` (every
-  number the company has tagged in its filings), the company's submissions
-  list (for the newest 10-Q or 10-K and the newest 8-K with item 2.02,
-  "Results of Operations") and that 8-K's folder to find the press release
-  (the EX-99.1 exhibit).
-- Writes `trader/metrics.json` with `--metrics`: one row per company (TTM
-  revenue, net income and diluted EPS, the latest margins and growth), for
-  your notes or a spreadsheet. `metrics.example.json` in this folder is a
-  real run for AAPL, AXP, GOOGL, KO and BAC on 2026-10-13.
-- Earnings calls: the tool does not fetch transcripts. If the user pastes one
-  (or the company's IR page has it), read it and sum up what management said
-  changed: guidance, margins, demand, anything they declined to answer.
-- The next report date is not in SEC data. Look for it in `/trader-news`
-  headlines or on the company's investor relations page, and say where it
-  came from.
+NSE's site wants a browser-like visit first, which the tool makes once per
+run. If NSE refuses, it says so in one line.
 
-## The rules
+## How the numbers are read
 
-- **Filed numbers first.** The table comes from XBRL facts the company filed.
-  Use the press release for context (guidance, segment colour), and say which
-  numbers came from where.
-- **Compare like with like.** Growth is against the same quarter a year
-  earlier. Quarter-on-quarter changes are shown but many businesses are
-  seasonal (Apple's December quarter is always its biggest).
-- **Say what is derived.** Companies do not file a Q4 10-Q. The fourth
-  quarter is the 10-K year minus the three quarters inside it and is marked
-  "derived"; derived EPS is approximate.
-- **Say when the data lags.** SEC's facts API can trail a filing. When the
-  newest 10-Q is later than the newest quarter in the facts, the tool prints a
-  NOTE with the link: read the 10-Q itself before summarising.
-- **Flag one-offs.** When net income is above operating income, gains outside
-  the business (investment marks, tax items) are inside it. The tool says so.
-  Banks and insurers have no gross margin: blank, not zero.
+- Consolidated (the group) by default; `--standalone` for the listed company
+  alone. A quarter filed only on the other basis falls back to it and says so.
+- Each filing covers its own quarter; comparisons come from the earlier
+  filings. A revised filing replaces the original.
+- The quarter is the ~3-month period ending on the report date, with no
+  segment (the filing's "OneD" context). The year-to-date figures in the same
+  file are ignored.
+- EBITDA is worked out, not filed: profit before tax + finance costs +
+  depreciation - other income. Banks report interest income differently, so
+  their revenue falls back to total income.
+- Amounts in ₹ crore (1 crore = 1,00,00,000), EPS in rupees.
 
 ## Steps
 
-1. Run it for the companies in question (or the tickers on
-   `trader/watchlist.json`):
+1. Run it for the symbol. Lead with the latest quarter: revenue, net profit
+   and EPS with their year-on-year change, then the margins.
+2. Say whether it is consolidated or standalone, and the filing date.
+3. If a quarter is missing or a filing could not be read, say so (the tool
+   prints a note).
+4. Never call the results good or bad for the price. The numbers are the
+   answer.
 
-   ```bash
-   python3 "${CLAUDE_SKILL_DIR}/facts.py" TSLA
-   python3 "${CLAUDE_SKILL_DIR}/facts.py" TSLA NVDA AMD --metrics trader/metrics.json
-   ```
+## Example (the test fixtures: a fictional company, SAMPLECO)
 
-   `--quarters 8` shows two years, `--json` everything machine-readable,
-   `--cik` a company without a ticker.
-2. Open the latest earnings press release (the EX-99 link) and the 10-Q when
-   the numbers need context, and read them.
-3. Write the summary: one line on the quarter (revenue, EPS, growth), one on
-   margins, one on anything unusual (a one-off, a derived quarter, data that
-   lags), and the links. Plain words, real numbers, no adjectives the numbers
-   do not support.
-4. If the next report falls inside the planned trade (an overnight hold, or a
-   report before the open), say it before `/trader-exit` sets the stop: a stop
-   does not protect against a gap, the stock can open past it.
+```
+Sample Industries Limited (NSE: SAMPLECO), consolidated results. ₹ crore except EPS. Source: NSE results filings (XBRL).
 
-## Example: the reel's stock
+quarter end basis      revenue  rev yoy  EBITDA     net  net profit   NP yoy      EPS  EPS yoy
+2026-09-30  consol    72,600.0   +10.5%   27.7%   13.7%     9,930.0   +12.1%    13.21   +12.0%
+2026-06-30  consol    68,300.0    +6.9%   27.6%   13.5%     9,240.0    +9.0%    12.29    +9.0%
+...
+Last 4 quarters: revenue ₹2,81,200.0 cr, net profit ₹38,680.0 cr, basic EPS ₹51.47.
+```
 
-`facts.py TSLA` (run 2026-10-20): quarter ending 2026-06-30 (Q2 2026),
-revenue $28.24B, +25.5% against a year earlier, net income $1.11B (-4.9%),
-diluted EPS $0.32 (-3.0%); gross margin 16.8% (-4.3 points on the quarter
-before), operating margin 1.4%; last four quarters $103.6B revenue and $1.08
-EPS. The tool flags that net income is above operating income, so gains
-outside the business are inside it. Latest 10-Q filed 2026-07-23. Monday's
-headlines said Tesla reports this week, so the summary ends: "The next report
-is days away. A day trade that closes before the bell is not exposed to it;
-anything held overnight is."
+## Rules
 
-`facts.py AAPL` (2026-10-13): revenue $109.42B, +16.4% against a year
-earlier, diluted EPS $2.02 (+28.7%). For Coca-Cola the tool noted that SEC's
-facts stopped at 2026-04-03 while the 10-Q for 2026-07-03 was already filed,
-so the summary read that 10-Q directly.
+- Numbers only, with their basis and period.
+- Results days are risky for a day trade: a gap at the results can skip a
+  stop. Say so if results are due today or tomorrow (check `/trader-news`).
 
 ## What it never does
 
-- Never says a stock is cheap, expensive, a buy or a sell. It reports what
-  the company filed.
-- Never invents a number the filings do not have, or estimates a quarter it
-  cannot derive.
-- Never calls SEC without the User-Agent, and stays well under 10 requests a
-  second.
-
-## Safety
-
-Education and tooling, not financial advice. This skill only reads filings.
-Nothing places an order except `/trader-broker`, after `/trader-risk` passes
-and the user types an explicit yes for that order.
+It never says whether a stock is a buy, never forecasts results, and never
+places an order. Not financial advice.
