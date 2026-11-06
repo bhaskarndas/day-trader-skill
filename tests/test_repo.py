@@ -5,15 +5,17 @@ import unittest
 
 from _load import ROOT
 
-# v2, the day-trading pack: the eleven folders the reel's repo card shows
+# the NSE edition of the v2 pack: eleven folders, trader-insider in place of the Pelosi tracker
 SKILLS = ["trader-scanner", "trader-news", "trader-entry", "trader-exit", "trader-timemachine",
           "trader-risk", "trader-budget", "trader-broker", "trader-alerts", "trader-analyst",
-          "trader-pelosi"]
-ABOUT = ("11 Claude skills for day trading: scan thousands of charts, track breaking news, time every "
-         "entry and exit, and replay every outcome before you risk a dollar.")
+          "trader-insider"]
+ABOUT = ("11 Claude skills for day trading on India's NSE: scan thousands of charts, track exchange filings, "
+         "time every entry and exit, and replay every outcome before you risk a rupee.")
 # skills on the way to an order carry the safety block
 ORDER_PATH = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
-              "trader-pelosi", "trader-risk", "trader-broker", "trader-alerts"]
+              "trader-insider", "trader-risk", "trader-broker", "trader-alerts"]
+US_ONLY = ["Alpaca", "place_stock_order", "SEC EDGAR", "Nasdaq Trader", "New York", "NYSE", "pdt_guard",
+           "trader-pelosi", "_usd\""]
 V1_ONLY = ["trader-copycat", "trader-screener", "trader-tax", "trader-rebalance"]
 
 
@@ -41,6 +43,17 @@ class Repo(unittest.TestCase):
     def test_root_matches_the_reel(self):
         root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git"))
         self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "README.md", "tests"] + SKILLS))
+
+    def test_no_us_market_leftovers_in_the_skills(self):
+        for s in SKILLS:
+            folder = os.path.join(ROOT, s)
+            for f in os.listdir(folder):
+                if not f.endswith((".py", ".md", ".json")):
+                    continue
+                with open(os.path.join(folder, f), encoding="utf-8") as fh:
+                    text = fh.read()
+                for word in US_ONLY:
+                    self.assertNotIn(word.replace("\\", ""), text, "%s/%s says %s" % (s, f, word))
 
     def test_frontmatter_name_and_description(self):
         for s in SKILLS:
@@ -73,8 +86,8 @@ class Repo(unittest.TestCase):
             readme = " ".join(fh.read().split())
         self.assertTrue(readme.startswith("# The Day Trader skill"))
         for line in (ABOUT,
-                     "https://github.com/Jakeschincariol/day-trader-skill install skill",
-                     "/plugin marketplace add Jakeschincariol/day-trader-skill",
+                     "https://github.com/bhaskarndas/day-trader-skill install skill",
+                     "/plugin marketplace add bhaskarndas/day-trader-skill",
                      "/plugin install day-trader-skill@day-trader-skill",
                      "## Fine print"):
             self.assertIn(line, readme)
@@ -86,7 +99,7 @@ class Repo(unittest.TestCase):
             with open(path, encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
             rel = os.path.relpath(path, ROOT)
-            if not rel.startswith(os.path.join("tests", "fixtures")):  # fixtures are real data, kept as published
+            if not rel.startswith(os.path.join("tests", "fixtures")):  # fixtures keep NSE's own text as it comes
                 self.assertNotIn("\u2014", text, rel)
             self.assertNotIn("jakeschincariol" + "@" + "gmail.com", text, rel)  # built, so this file passes too
 
@@ -121,7 +134,7 @@ class Repo(unittest.TestCase):
     def test_day_trading_limits_ship_in_the_example_config(self):
         with open(os.path.join(ROOT, "trader-budget", "config.example.json")) as fh:
             cfg = json.load(fh)
-        for k in ("max_loss_per_trade_usd", "max_daily_loss_usd", "max_trades_per_day",
+        for k in ("max_loss_per_trade_inr", "max_daily_loss_inr", "max_trades_per_day",
                   "min_reward_risk", "require_stop", "no_entries_after", "flat_by"):
             self.assertIn(k, cfg, k)
         self.assertIs(cfg["require_stop"], True)
@@ -132,7 +145,19 @@ class Repo(unittest.TestCase):
         with open(os.path.join(ROOT, "trader-budget", "config.example.json")) as fh:
             cfg = json.load(fh)
         self.assertIs(cfg["paper"], True)
+        self.assertEqual(cfg["broker"], "paper")
+        self.assertEqual(cfg["product"], "MIS")
         self.assertIs(cfg.get("allow_options", False), False)
+
+    def test_the_example_config_is_in_rupees_with_indian_charges(self):
+        with open(os.path.join(ROOT, "trader-budget", "config.example.json")) as fh:
+            cfg = json.load(fh)
+        self.assertFalse([k for k in cfg if k.endswith("_usd")])
+        for k in ("brokerage_pct", "brokerage_max_per_order", "stt_sell_pct", "exchange_pct", "sebi_per_crore",
+                  "stamp_buy_pct", "gst_pct"):
+            self.assertIn(k, cfg["charges"], k)
+        self.assertEqual(cfg["flat_by"], "15:10")
+        self.assertEqual(cfg["no_entries_before"], "09:30")
 
 
 if __name__ == "__main__":

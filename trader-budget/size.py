@@ -1,26 +1,38 @@
 #!/usr/bin/env python3
 """Position sizing for trader-budget. Standard library only, no network.
 
-Default mode: sizes ONE day trade from trader/plan.json (written by
-trader-exit) to your budget and your max loss per trade, then writes one
-bracket order (entry, stop-loss, take-profit) to trader/orders.json in the
-shape of Alpaca's place_stock_order. It never places anything: trader-risk
-checks the order and trader-broker asks you yes or no.
+Default mode: sizes ONE NSE intraday trade from trader/plan.json (written by
+trader-exit) to your budget and your max loss per trade, AFTER Indian
+trading charges, then writes one bracket order (entry, stop-loss,
+take-profit, product MIS) to trader/orders.json. It never places anything:
+trader-risk checks the order and trader-broker (paper) asks you yes or no.
 
     python3 size.py                                  # trader/plan.json + trader/config.json
     python3 size.py --write                          # write trader/orders.json
     python3 size.py --limit                          # a limit order at the plan's entry
-    python3 size.py --limit 364.00 --write           # a limit order at 364.00
-    python3 size.py --now "2026-10-19 10:15" --json  # pin the clock (New York time)
+    python3 size.py --limit 1311.00 --write          # a limit order at 1311.00
+    python3 size.py --now "2026-11-05 10:00" --json  # pin the clock (IST)
 
-How many shares. Whole shares only: Alpaca takes no fractions in a bracket.
+How many shares. Whole shares only: NSE cash equity has no fractions.
 
-    shares = floor of the smallest of
-      max loss       max_loss_per_trade_usd / risk per share (entry minus stop)
+    shares = the smallest of
+      max loss       the most shares whose loss at the stop PLUS the round-trip
+                     charges fits max_loss_per_trade_inr
       position cap   budget x max_position_pct / entry
-      max order      max_order_usd / entry
+      max order      max_order_inr / entry
       cash           (budget minus the cash buffer) / entry
                      (and no more than the cash in trader/portfolio.json, if you have one)
+
+Charges (intraday equity on NSE, the defaults; override any of them under
+"charges" in trader/config.json, they change with your broker and the rules):
+  brokerage   0.03 % of each order's value, at most ₹20 an order
+  STT         0.025 % of the sell value
+  exchange    0.00297 % of buy + sell (NSE transaction charge)
+  SEBI fee    ₹10 a crore of buy + sell
+  stamp duty  0.003 % of the buy value
+  GST         18 % of brokerage + exchange + SEBI fee
+The report shows the charges at the stop and at the target, the reward:risk
+after them, and the move a share needs just to cover them.
 
 The entry it sizes at: a limit order's limit price; for a market order the
 plan's entry, or the price in trader/prices.json if that is fresh (under 15
@@ -32,8 +44,8 @@ min_reward_risk (the price ran toward the target since the plan).
 Weights mode (kept from v1, no longer the headline): split a budget across a
 list of stocks by weight.
 
-    python3 size.py --weights AAPL=22.04,AXP=17.14,GOOGL=12.62,KO=10.86,BAC=9.20
-    python3 size.py --targets my-weights.json --budget 5000 --write
+    python3 size.py --weights RELIANCE=25,HDFCBANK=20,TCS=20,INFY=20,ITC=15
+    python3 size.py --targets my-weights.json --budget 100000 --write
     python3 size.py --weights ... --whole-shares --prices trader/prices.json
 
   1. cash buffer   budget x cash_buffer_pct stays in cash, never invested
@@ -42,11 +54,13 @@ list of stocks by weight.
   3. cap           no stock gets more than max_position_pct of the budget;
                    anything over the cap is shared out to the others by
                    weight, again and again until nobody is over
-  4. min order     a slice under min_order_usd is dropped and its weight
-                   shared out, so you never place a $2 order
-  5. rounding      whole dollars by default (--cents for cents); the rounding
-                   dollar goes to the biggest position that is not capped
-  6. whole shares  with --whole-shares or "fractional": false; needs prices
+  4. min order     a slice under min_order_inr is dropped and its weight
+                   shared out, so you never place a ₹20 order
+  5. rounding      whole rupees by default (--cents for paise); the rounding
+                   rupee goes to the biggest position that is not capped
+  6. whole shares  always (NSE has no fractional shares); needs prices
+                   (--prices trader/prices.json). These are delivery (CNC)
+                   orders, not day trades: they go through trader-risk too.
 
 Money that cannot be invested is reported as "left idle", never hidden.
 """
@@ -63,25 +77,36 @@ DEFAULTS = {
     "budget": None,
     "cash_buffer_pct": 10,
     "max_position_pct": 75,
-    "max_order_usd": 4000,
-    "min_order_usd": 5,
-    "max_loss_per_trade_usd": 50,
-    "max_daily_loss_usd": 150,
+    "max_order_inr": 80000,
+    "min_order_inr": 100,
+    "max_loss_per_trade_inr": 500,
+    "max_daily_loss_inr": 1500,
     "max_trades_per_day": 3,
     "max_orders_per_day": 10,
     "min_reward_risk": 1.0,
     "require_stop": True,
-    "no_entries_before": "09:45",
-    "no_entries_after": "15:30",
-    "flat_by": "15:55",
+    "no_entries_before": "09:30",
+    "no_entries_after": "14:45",
+    "flat_by": "15:10",
     "fractional": False,
-    "broker": "alpaca",
+    "broker": "paper",
+    "product": "MIS",
     "paper": True,
     "blocked": [],
     "allow_options": False,
     "allow_margin": False,
     "allow_short": False,
-    "pdt_guard": False,
+    "charges": {},
+}
+# Intraday equity on NSE (read 2026-11-06 from broker charge sheets; check yours).
+CHARGES = {
+    "brokerage_pct": 0.03,            # of each order's value ...
+    "brokerage_max_per_order": 20.0,  # ... capped at ₹20 an order
+    "stt_sell_pct": 0.025,            # securities transaction tax, sell side (intraday)
+    "exchange_pct": 0.00297,          # NSE transaction charge, both sides
+    "sebi_per_crore": 10.0,           # SEBI turnover fee, both sides
+    "stamp_buy_pct": 0.003,           # stamp duty, buy side (intraday)
+    "gst_pct": 18.0,                  # on brokerage + exchange + SEBI fee
 }
 EPS = 1e-9
 FRESH_MINUTES = 15
@@ -92,53 +117,40 @@ class SizeError(Exception):
     pass
 
 
-# ---------------------------------------------------------------- time (New York, no tz files)
+# ---------------------------------------------------------------- time (IST, no tz files)
 
-def _nth_sunday(year, month, n):
-    d = datetime.date(year, month, 1)
-    d += datetime.timedelta(days=(6 - d.weekday()) % 7)
-    return d + datetime.timedelta(weeks=n - 1)
+IST_OFFSET = datetime.timedelta(hours=5, minutes=30)   # India has no daylight saving
 
 
-def eastern_offset(utc):
-    """Hours from UTC for New York: -4 in daylight time, -5 otherwise.
-    DST runs from 2:00 a.m. on the second Sunday of March to 2:00 a.m. on the
-    first Sunday of November (US rule since 2007)."""
-    y = utc.year
-    start = datetime.datetime.combine(_nth_sunday(y, 3, 2), datetime.time(7, 0))   # 2:00 EST
-    end = datetime.datetime.combine(_nth_sunday(y, 11, 1), datetime.time(6, 0))    # 2:00 EDT
-    naive = utc.replace(tzinfo=None)
-    return -4 if start <= naive < end else -5
+def ist_offset(utc=None):
+    """Hours from UTC for India: always +5.5 (IST, no daylight saving)."""
+    return 5.5
 
 
-def to_eastern(utc):
-    return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
+def to_ist(utc):
+    return utc.replace(tzinfo=None) + IST_OFFSET
 
 
-def eastern_to_utc(local):
-    for off in (-4, -5):
-        utc = local - datetime.timedelta(hours=off)
-        if eastern_offset(utc) == off:
-            return utc
-    return local + datetime.timedelta(hours=5)
+def ist_to_utc(local):
+    return local.replace(tzinfo=None) - IST_OFFSET
 
 
 def parse_now(text):
-    """ISO time -> naive UTC. A time without an offset is taken as New York time."""
+    """ISO time -> naive UTC. A time without an offset is taken as India time (IST)."""
     if not text:
         return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
     t = text.strip().replace("Z", "+00:00")
     try:
         dt = datetime.datetime.fromisoformat(t)
     except ValueError:
-        raise SizeError("--now wants a time like \"2026-10-19 10:15\" (New York) or ...Z (UTC)")
+        raise SizeError("--now wants a time like \"2026-11-05 10:00\" (IST) or ...Z (UTC)")
     if dt.tzinfo is None:
-        return eastern_to_utc(dt)
+        return ist_to_utc(dt)
     return (dt - dt.utcoffset()).replace(tzinfo=None)
 
 
 def parse_utc(text):
-    """"2026-10-19T14:52:13Z" -> naive UTC, or None."""
+    """"2026-11-05T04:30:00Z" -> naive UTC, or None."""
     if not text:
         return None
     try:
@@ -213,7 +225,7 @@ def parse_weights(data):
 
 
 def weights_from_arg(text):
-    """AAPL=22.04,AXP=17.14 -> {ticker: weight}"""
+    """RELIANCE=25,TCS=20 -> {ticker: weight}"""
     out = {}
     for part in text.split(","):
         part = part.strip()
@@ -273,7 +285,7 @@ def round_cent(x):
 
 
 def shares_for(usd, per_share):
-    """Whole shares that fit in usd at per_share, in exact integer cents."""
+    """Whole shares that fit in an amount at per_share, in exact integer paise."""
     u, p = int(round(float(usd) * 100)), int(round(float(per_share) * 100))
     if p <= 0 or u <= 0:
         return 0
@@ -281,23 +293,81 @@ def shares_for(usd, per_share):
 
 
 def _price(x):
-    """358.32 -> "358.32": Alpaca wants prices as strings."""
+    """1304.1 -> "1304.10": order prices travel as strings."""
     return "%.2f" % round_cent(x)
 
 
 def _num(x):
-    """1250 -> "1250", 1118.13 -> "1118.13" (Alpaca wants these as strings)."""
+    """1250 -> "1250", 1118.13 -> "1118.13" (order fields travel as strings)."""
     x = round(float(x), 2)
     if abs(x - round(x)) < 0.005:
         return str(int(round(x)))
     return "%.2f" % x
 
 
+def group_in(digits):
+    """Indian digit grouping: 1234567 -> 12,34,567 (lakh and crore)."""
+    neg = digits.startswith("-")
+    s = digits.lstrip("-")
+    if len(s) > 3:
+        head, tail = s[:-3], s[-3:]
+        parts = []
+        while len(head) > 2:
+            parts.insert(0, head[-2:])
+            head = head[:-2]
+        if head:
+            parts.insert(0, head)
+        s = ",".join(parts + [tail])
+    return ("-" if neg else "") + s
+
+
+def inr(x, paise=None):
+    """1234567.5 -> "₹12,34,567.50". paise=None drops ".00" on whole rupees."""
+    v = round(float(x) + (1e-9 if float(x) >= 0 else -1e-9), 2)
+    whole, frac = ("%.2f" % abs(v)).split(".")
+    s = group_in(whole)
+    if paise or (paise is None and frac != "00"):
+        s += "." + frac
+    return ("-" if v < 0 else "") + "₹" + s
+
+
 def money(x):
-    x = float(x)
-    if abs(x - round(x)) < 0.005:
-        return "$" + "{:,.0f}".format(round(x))
-    return "$" + "{:,.2f}".format(x)
+    return inr(x)
+
+
+def charge_rates(cfg):
+    rates = dict(CHARGES)
+    for k, v in ((cfg or {}).get("charges") or {}).items():
+        if k in rates and _f(v) is not None and _f(v) >= 0:
+            rates[k] = _f(v)
+    return rates
+
+
+def charges(buy_value, sell_value, rates=None):
+    """Round-trip charges on one intraday trade, in rupees: a dict of the parts and the total."""
+    r = rates or CHARGES
+    bv, sv = max(float(buy_value), 0.0), max(float(sell_value), 0.0)
+
+    def brok(v):
+        return min(r["brokerage_max_per_order"], v * r["brokerage_pct"] / 100.0) if v > 0 else 0.0
+    out = {"brokerage": brok(bv) + brok(sv), "stt": sv * r["stt_sell_pct"] / 100.0,
+           "exchange": (bv + sv) * r["exchange_pct"] / 100.0, "sebi": (bv + sv) * r["sebi_per_crore"] / 1e7,
+           "stamp": bv * r["stamp_buy_pct"] / 100.0}
+    out["gst"] = (out["brokerage"] + out["exchange"] + out["sebi"]) * r["gst_pct"] / 100.0
+    out = {k: round(v, 2) for k, v in out.items()}
+    out["total"] = round(sum(out.values()), 2)
+    return out
+
+
+def shares_after_charges(max_loss, entry, stop, rates):
+    """The most whole shares whose loss at the stop plus the round-trip charges fits max_loss."""
+    risk = entry - stop
+    if risk <= 0 or max_loss <= 0:
+        return 0
+    q = int(max_loss // risk) + 1
+    while q > 0 and q * risk + charges(q * entry, q * stop, rates)["total"] > max_loss + 1e-6:
+        q -= 1
+    return q
 
 
 # ---------------------------------------------------------------- plan mode (the default)
@@ -308,7 +378,7 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     limit  the limit price for a limit order (None = market)
     price  a FRESH latest price; a market order is sized at the higher of it and the plan's entry
     cash   the cash in trader/portfolio.json, if there is one
-    today  New York date (YYYY-MM-DD); a plan for another day is refused"""
+    today  India (IST) date (YYYY-MM-DD); a plan for another day is refused"""
     c = dict(DEFAULTS)
     c.update(cfg or {})
     if not isinstance(plan, dict):
@@ -320,7 +390,7 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     if side != "buy":
         raise SizeError("this pack sizes long (buy) day trades only; the plan says %r" % side)
     if today and plan.get("date") and str(plan["date"]) != today:
-        raise SizeError("the plan is for %s and today is %s in New York: make a new plan with trader-exit"
+        raise SizeError("the plan is for %s and today is %s in IST: make a new plan with trader-exit"
                         % (plan["date"], today))
     entry_plan, stop, target = _f(plan.get("entry")), _f(plan.get("stop")), _f(plan.get("target"))
     for name, v in (("entry", entry_plan), ("stop", stop), ("target", target)):
@@ -364,16 +434,18 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     available = max(round(available, 2), 0.0)
 
     limits = []
-    max_loss = _f(c.get("max_loss_per_trade_usd"))
+    rates = charge_rates(c)
+    max_loss = _f(c.get("max_loss_per_trade_inr"))
     if max_loss:
-        limits.append({"name": "max loss", "usd": max_loss, "per": risk, "shares": shares_for(max_loss, risk),
-                       "how": "%s max loss / %s risk a share" % (money(max_loss), _price(risk))})
+        limits.append({"name": "max loss", "usd": max_loss, "per": risk,
+                       "shares": shares_after_charges(max_loss, ref, stop, rates),
+                       "how": "%s max loss, %s risk a share + charges" % (money(max_loss), _price(risk))})
     cap_pct = _f(c.get("max_position_pct"))
     if cap_pct:
         cap = round(budget * cap_pct / 100.0, 2)
         limits.append({"name": "position cap", "usd": cap, "per": ref, "shares": shares_for(cap, ref),
                        "how": "%s%% of %s = %s / %s" % (_num(cap_pct), money(budget), money(cap), _price(ref))})
-    max_order = _f(c.get("max_order_usd"))
+    max_order = _f(c.get("max_order_inr"))
     if max_order:
         limits.append({"name": "max order", "usd": max_order, "per": ref, "shares": shares_for(max_order, ref),
                        "how": "%s / %s" % (money(max_order), _price(ref))})
@@ -385,12 +457,16 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     for l in limits:
         l["binds"] = l["name"] == bound[0]
     cost = round(qty * ref, 2)
-    loss = round(qty * risk_c / 100.0, 2)
+    at_stop = charges(qty * ref, qty * stop, rates) if qty else charges(0, 0, rates)
+    at_target = charges(qty * ref, qty * target, rates) if qty else charges(0, 0, rates)
+    loss = round(qty * risk_c / 100.0 + at_stop["total"], 2)
+    gain = round(qty * reward_c / 100.0 - at_target["total"], 2)
+    one = charges(ref, ref, rates)["total"]
     refusal = None
     if qty == 0:
         if bound[0] == "max loss":
-            refusal = ("one share risks %s (entry %s minus stop %s), more than your %s max loss per trade. "
-                       "No order. Skip this trade, or plan a closer stop with trader-exit."
+            refusal = ("one share risks %s (entry %s minus stop %s) plus charges, more than your %s max loss "
+                       "per trade. No order. Skip this trade, or plan a closer stop with trader-exit."
                        % (money(risk), _price(ref), _price(stop), money(max_loss)))
         else:
             refusal = ("one share of %s costs %s, more than your %s limit (%s). No order."
@@ -399,9 +475,9 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
         refusal = ("reward:risk %.2f (target %s, entry %s, stop %s) is under your minimum %s, so trader-risk "
                    "would block it. No order. Skip it, or make a new plan with trader-exit."
                    % (reward_c / float(risk_c), _price(target), _price(ref), _price(stop), _num(c["min_reward_risk"])))
-    elif cost < float(c.get("min_order_usd") or 0) - 0.005:
+    elif cost < float(c.get("min_order_inr") or 0) - 0.005:
         refusal = ("%d share%s of %s is %s, under your %s minimum order. No order."
-                   % (qty, "" if qty == 1 else "s", sym, money(cost), money(c["min_order_usd"])))
+                   % (qty, "" if qty == 1 else "s", sym, money(cost), money(c["min_order_inr"])))
     return {
         "symbol": sym, "side": "buy", "setup": plan.get("setup", ""), "date": plan.get("date"),
         "entry_time": plan.get("entry_time", ""), "entry_plan": round_cent(entry_plan),
@@ -409,23 +485,27 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
         "risk_per_share": risk, "reward_risk": round(reward_c / float(risk_c), 2),
         "stop_label": plan.get("stop_label", ""), "target_label": plan.get("target_label", ""),
         "budget": budget, "cash_buffer_pct": buf_pct, "cash_buffer": cash_buffer, "cash_available": available,
-        "max_loss_per_trade_usd": max_loss, "limits": limits, "qty": qty, "bound_by": bound[0],
+        "max_loss_per_trade_inr": max_loss, "limits": limits, "qty": qty, "bound_by": bound[0],
         "cost": cost, "max_loss": loss, "flat_by": plan.get("flat_by") or c.get("flat_by"),
+        "charges_at_stop": at_stop, "charges_at_target": at_target, "net_gain_at_target": gain,
+        "net_reward_risk": round(gain / loss, 2) if qty and loss > 0 else None,
+        "break_even_move": round(charges(qty * ref, qty * ref, rates)["total"] / qty, 2) if qty else round(one, 2),
+        "product": str(c.get("product") or "MIS").upper(),
         "order_type": "limit" if limit is not None else "market", "refusal": refusal,
     }
 
 
 def bracket_order(s):
-    """The one proposed order, Alpaca place_stock_order fields (strings) plus why and plan."""
+    """The one proposed order (prices as strings, product MIS) plus why and plan."""
     if s["refusal"] or s["qty"] <= 0:
         return None
-    o = {"symbol": s["symbol"], "side": "buy", "qty": str(int(s["qty"])), "type": s["order_type"],
-         "time_in_force": "day"}
+    o = {"symbol": s["symbol"], "exchange": "NSE", "side": "buy", "qty": str(int(s["qty"])),
+         "type": s["order_type"], "time_in_force": "day", "product": s["product"]}
     if s["order_type"] == "limit":
         o["limit_price"] = _price(s["entry"])
     setup = SETUP_WORDS.get(s["setup"], s["setup"] or "day trade")
-    why = ("%s on %s: %d shares, bound by your %s (%d x %s = %s at the stop)"
-           % (setup, s["symbol"], s["qty"], {"max loss": "%s max loss per trade" % money(s["max_loss_per_trade_usd"] or 0),
+    why = ("%s on %s: %d shares, bound by your %s (%d x %s + charges = %s at the stop)"
+           % (setup, s["symbol"], s["qty"], {"max loss": "%s max loss per trade" % money(s["max_loss_per_trade_inr"] or 0),
                                              "position cap": "position cap", "max order": "max order",
                                              "cash": "cash after the buffer"}[s["bound_by"]],
               s["qty"], _price(s["risk_per_share"]), money(s["max_loss"])))
@@ -436,6 +516,8 @@ def bracket_order(s):
         "why": why,
         "plan": {"entry": s["entry"], "stop": s["stop"], "target": s["target"],
                  "risk_per_share": s["risk_per_share"], "max_loss": s["max_loss"], "setup": s["setup"],
+                 "charges_at_stop": s["charges_at_stop"]["total"],
+                 "charges_at_target": s["charges_at_target"]["total"],
                  "entry_time": s["entry_time"], "flat_by": s["flat_by"]},
     })
     return o
@@ -466,19 +548,26 @@ def plan_report(s, order, notes=()):
         lines.append("No order: " + s["refusal"])
         lines.append("Education and tooling, not financial advice.")
         return "\n".join(lines)
-    lines.append("Size: %d shares of %s = %s at %s. Max loss at the stop: %d x %s = %s."
+    cs, ct = s["charges_at_stop"], s["charges_at_target"]
+    lines.append("Size: %d shares of %s = %s at %s. Max loss at the stop: %d x %s + %s charges = %s."
                  % (s["qty"], s["symbol"], money(s["cost"]), _price(s["entry"]), s["qty"],
-                    _price(s["risk_per_share"]), money(s["max_loss"])))
+                    _price(s["risk_per_share"]), money(cs["total"]), money(s["max_loss"])))
+    lines.append("Charges at the stop: brokerage %s, STT %s, exchange %s, SEBI %s, stamp %s, GST %s."
+                 % tuple(money(cs[k]) for k in ("brokerage", "stt", "exchange", "sebi", "stamp", "gst")))
+    lines.append("At the target: %s gross - %s charges = %s net. Reward:risk after charges %s."
+                 % (money(round(s["qty"] * (s["target"] - s["entry"]), 2)), money(ct["total"]),
+                    money(s["net_gain_at_target"]), "%.2f" % s["net_reward_risk"] if s["net_reward_risk"] else "-"))
+    lines.append("Each share has to move %s just to pay the round trip's charges." % _price(s["break_even_move"]))
     lines.append("A stop is an order, not a promise: in a fast market it can fill below %s." % _price(s["stop"]))
     lines.append("")
-    lines.append("Proposed bracket order (place_stock_order arguments, nothing has been placed):")
+    lines.append("Proposed bracket order (nothing has been placed):")
     how = "limit %s" % order["limit_price"] if order["type"] == "limit" else "market"
-    lines.append("  buy %s %s, %s, day, take-profit %s, stop-loss %s"
-                 % (order["qty"], order["symbol"], how, order["take_profit_limit_price"],
+    lines.append("  buy %s %s on NSE, %s, %s, day, take-profit %s, stop-loss %s"
+                 % (order["qty"], order["symbol"], how, order["product"], order["take_profit_limit_price"],
                     order["stop_loss_stop_price"]))
     if s["flat_by"]:
-        lines.append("Flat by %s New York: anything still open then gets closed (trader-alerts rings, "
-                     "trader-broker flatten)." % s["flat_by"])
+        lines.append("Flat by %s IST: anything still open then gets closed (trader-alerts rings, "
+                     "trader-broker flatten), before your broker's MIS square-off." % s["flat_by"])
     lines.append("")
     lines.append("Next: trader-risk checks it, then trader-broker asks you yes or no.")
     lines.append("Education and tooling, not financial advice.")
@@ -514,11 +603,11 @@ def normalise(rows, blocked=(), top=None):
 
 
 def allocate(rows, investable, cap):
-    """Exact (unrounded) dollars per ticker with the cap enforced.
+    """Exact (unrounded) rupees per ticker with the cap enforced.
 
     Proportional to weight; any stock over the cap is pinned at the cap and
     the rest of the money is shared over the others, repeated until no stock
-    is over. Returns ({ticker: dollars}, set of capped tickers)."""
+    is over. Returns ({ticker: rupees}, set of capped tickers)."""
     alloc, capped = {}, set()
     active = [r for r in rows]
     money_left = investable
@@ -542,7 +631,7 @@ def allocate(rows, investable, cap):
 
 
 def round_to_unit(exact, capped, order, cap, unit):
-    """Round to whole dollars (unit 1) or cents (unit 0.01) and keep the total.
+    """Round to whole rupees (unit 1) or paise (unit 0.01) and keep the total.
 
     The total placed is the exact total rounded DOWN to the unit, so it never
     spends money you do not have. Each slice is rounded to the nearest unit,
@@ -609,13 +698,13 @@ def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None)
         raise SizeError("no budget: pass --budget or set \"budget\" in trader/config.json")
     buf_pct = float(cfg.get("cash_buffer_pct", 10))
     cap_pct = float(cfg.get("max_position_pct", 25))
-    min_order = float(cfg.get("min_order_usd", 5) or 0)
+    min_order = float(cfg.get("min_order_inr", 5) or 0)
     if not 0 <= buf_pct < 100:
         raise SizeError("cash_buffer_pct must be between 0 and 100")
     if not 0 < cap_pct <= 100:
         raise SizeError("max_position_pct must be above 0 and at most 100")
     if whole is None:
-        whole = not cfg.get("fractional", True)
+        whole = True        # NSE cash equity: whole shares only, so a split needs prices
     prices = prices or {}
 
     keep, dropped = normalise(rows, cfg.get("blocked"), top)
@@ -651,10 +740,10 @@ def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None)
             break
         worst = min(small, key=lambda r: (r["source_weight"], r["ticker"]))
         if whole and shares is not None and shares[worst["ticker"]] == 0 and prices.get(worst["ticker"], 0) > 0:
-            reason = ("one share costs $%s, more than its slice; it cannot be bought in whole shares"
+            reason = ("one share costs ₹%s, more than its slice; it cannot be bought in whole shares"
                       % _num(prices[worst["ticker"]]))
         else:
-            reason = "its slice ($%s) is under your $%s minimum order" % (
+            reason = "its slice (₹%s) is under your ₹%s minimum order" % (
                 _num(dollars[worst["ticker"]]), _num(min_order))
         dropped.append({"ticker": worst["ticker"], "reason": reason})
         keep = [r for r in keep if r["ticker"] != worst["ticker"]]
@@ -665,39 +754,41 @@ def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None)
     for r in sorted(live, key=lambda r: -r["weight"]):
         t = r["ticker"]
         p = {"ticker": t, "name": r["name"], "weight": round(r["weight"], 2),
-             "source_weight": r["source_weight"], "dollars": dollars[t],
+             "source_weight": r["source_weight"], "rupees": dollars[t],
              "capped": t in capped}
         if prices.get(t):
             p["price"] = prices[t]
             p["shares"] = shares[t] if whole else round(dollars[t] / prices[t], 4)
         positions.append(p)
-    invested = round(sum(p["dollars"] for p in positions), 2)
+    invested = round(sum(p["rupees"] for p in positions), 2)
     return {
         "budget": budget, "cash_buffer_pct": buf_pct, "cash_buffer": cash_buffer,
         "investable": investable, "max_position_pct": cap_pct, "cap": cap,
-        "min_order_usd": min_order, "whole_shares": bool(whole),
+        "min_order_inr": min_order, "whole_shares": bool(whole),
         "positions": positions, "invested": invested,
         "idle": round(investable - invested, 2), "dropped": dropped,
     }
 
 
 def orders_from(result, source=""):
-    """Weights mode: proposed buy orders, one per position, in place_stock_order shape."""
+    """Weights mode: proposed delivery (CNC) buy orders, one per position, whole shares."""
     out = []
     for p in result["positions"]:
-        if p["dollars"] <= 0:
+        if p["rupees"] <= 0:
             continue
         why = "%.2f%% of the split" % p["weight"]
         if source:
             why = "%s, weights from %s" % (why, source)
         if p["capped"]:
             why += "; capped at %s%% of the %s budget" % (_num(result["max_position_pct"]), money(result["budget"]))
-        o = {"symbol": p["ticker"], "side": "buy"}
+        o = {"symbol": p["ticker"], "exchange": "NSE", "side": "buy"}
         if result["whole_shares"]:
+            if not p.get("shares"):
+                continue
             o["qty"] = str(int(p["shares"]))
         else:
-            o["notional"] = _num(p["dollars"])
-        o.update({"type": "market", "time_in_force": "day", "why": why})
+            o["notional"] = _num(p["rupees"])
+        o.update({"type": "market", "time_in_force": "day", "product": "CNC", "why": why})
         out.append(o)
     return out
 
@@ -713,12 +804,12 @@ def report(result, orders, source=""):
                     money(r["investable"]), _num(r["max_position_pct"]), money(r["cap"])))
     lines.append("")
     has_price = any("price" in p for p in r["positions"])
-    head = "%-7s %-22s %8s %11s" % ("ticker", "name", "weight", "dollars")
+    head = "%-7s %-22s %8s %11s" % ("ticker", "name", "weight", "rupees")
     if has_price:
         head += " %10s %10s" % ("price", "shares")
     lines.append(head + "  note")
     for p in r["positions"]:
-        row = "%-7s %-22s %7.2f%% %11s" % (p["ticker"], (p["name"] or "")[:22], p["weight"], money(p["dollars"]))
+        row = "%-7s %-22s %7.2f%% %11s" % (p["ticker"], (p["name"] or "")[:22], p["weight"], money(p["rupees"]))
         if has_price:
             row += " %10s %10s" % (money(p["price"]) if "price" in p else "", p.get("shares", ""))
         if p["capped"]:
@@ -735,7 +826,7 @@ def report(result, orders, source=""):
     for d in r["dropped"]:
         lines.append("Dropped %s: %s" % (d["ticker"], d["reason"]))
     lines.append("")
-    lines.append("Proposed orders (place_stock_order arguments, nothing has been placed):")
+    lines.append("Proposed delivery (CNC) orders, nothing has been placed:")
     for o in orders:
         amount = ("notional \"%s\"" % o["notional"]) if "notional" in o else ("qty \"%s\"" % o["qty"])
         lines.append("  %s %s %s, %s, %s" % (o["side"], o["symbol"], amount, o["type"], o["time_in_force"]))
@@ -774,7 +865,7 @@ def write_orders(path, orders, cfg, source="", now_utc=None):
 
 def run_plan(a, cfg):
     now = parse_now(a.now)
-    today = to_eastern(now).date().isoformat()
+    today = to_ist(now).date().isoformat()
     plan = read_json(a.plan, "plan (run trader-exit first, or use --weights for a split)")
     limit = None
     if a.limit is not None:
@@ -793,12 +884,12 @@ def run_plan(a, cfg):
         if p is not None and fresh:
             price = p
             if round_cent(p) > round_cent(_f(plan.get("entry")) or 0):
-                notes.append("%s last %s (as of %s New York) is above the plan's entry %s, so the risk "
-                             "is bigger: sized at %s." % (sym, _price(p), to_eastern(t).strftime("%H:%M"),
+                notes.append("%s last %s (as of %s IST) is above the plan's entry %s, so the risk "
+                             "is bigger: sized at %s." % (sym, _price(p), to_ist(t).strftime("%H:%M"),
                                                           _price(plan.get("entry")), _price(p)))
         elif p is not None:
             notes.append("%s in %s is %s: not used (older than %d minutes). Sized at the plan's entry."
-                         % (sym, ppath, ("from " + to_eastern(t).strftime("%Y-%m-%d %H:%M") + " New York")
+                         % (sym, ppath, ("from " + to_ist(t).strftime("%Y-%m-%d %H:%M") + " IST")
                             if t else "undated", FRESH_MINUTES))
     cash = None
     if a.portfolio and os.path.exists(a.portfolio):
@@ -854,16 +945,16 @@ def main(argv=None):
     ap.add_argument("--prices", help="prices JSON (default trader/prices.json if it exists)")
     ap.add_argument("--portfolio", default="trader/portfolio.json",
                     help="your account; its cash caps the size if it exists")
-    ap.add_argument("--now", help="pretend it is this New York time, e.g. \"2026-10-19 10:15\"")
+    ap.add_argument("--now", help="pretend it is this India time (IST), e.g. \"2026-11-05 10:00\"")
     ap.add_argument("--write", nargs="?", const="trader/orders.json", metavar="PATH",
                     help="write the proposed order (default trader/orders.json)")
     ap.add_argument("--json", action="store_true", help="print JSON instead of the report")
     g = ap.add_argument_group("weights mode (split a budget across a list)")
-    g.add_argument("--weights", help="inline weights: AAPL=22.04,AXP=17.14")
+    g.add_argument("--weights", help="inline weights: RELIANCE=25,TCS=20")
     g.add_argument("--targets", help="a weights file: {\"weights\": [{\"ticker\", \"weight\"}]}")
     g.add_argument("--top", type=int, help="keep only the N biggest weights")
     g.add_argument("--whole-shares", action="store_true", help="whole shares only (needs --prices)")
-    g.add_argument("--cents", action="store_true", help="size to the cent instead of whole dollars")
+    g.add_argument("--cents", action="store_true", help="size to the paisa instead of whole rupees")
     a = ap.parse_args(argv)
     try:
         cfg = load_config(a.config)

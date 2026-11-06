@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:xbrldi="http://xbrl.org/2006/xbrldi" xmlns:iso4217="http://www.xbrl.org/2003/iso4217" xmlns:in-capmkt="http://www.sebi.gov.in/xbrl/2026-01-31/in-capmkt">
+<xbrli:context id="OneD"><xbrli:entity><xbrli:identifier scheme="http://www.nseindia.com">SAMPLECO</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2025-10-01</xbrli:startDate><xbrli:endDate>2025-12-31</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:context id="FourD"><xbrli:entity><xbrli:identifier scheme="http://www.nseindia.com">SAMPLECO</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2025-04-01</xbrli:startDate><xbrli:endDate>2025-12-31</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:context id="OneOtherExpensesD"><xbrli:entity><xbrli:identifier scheme="http://www.nseindia.com">SAMPLECO</xbrli:identifier><xbrli:segment><xbrldi:explicitMember dimension="in-capmkt:OtherExpensesAxis">in-capmkt:OtherExpenses1Member</xbrldi:explicitMember></xbrli:segment></xbrli:entity><xbrli:period><xbrli:startDate>2025-10-01</xbrli:startDate><xbrli:endDate>2025-12-31</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:unit id="INR"><xbrli:measure>iso4217:INR</xbrli:measure></xbrli:unit>
+<xbrli:unit id="EPS"><xbrli:divide><xbrli:unitNumerator><xbrli:measure>iso4217:INR</xbrli:measure></xbrli:unitNumerator><xbrli:unitDenominator><xbrli:measure>xbrli:shares</xbrli:measure></xbrli:unitDenominator></xbrli:divide></xbrli:unit>
+<in-capmkt:Symbol contextRef="OneD">SAMPLECO</in-capmkt:Symbol>
+<in-capmkt:NameOfTheCompany contextRef="OneD">Sample Industries Limited</in-capmkt:NameOfTheCompany>
+<in-capmkt:ReportingQuarter contextRef="OneD">Third quarter</in-capmkt:ReportingQuarter>
+<in-capmkt:DateOfStartOfReportingPeriod contextRef="OneD">2025-10-01</in-capmkt:DateOfStartOfReportingPeriod>
+<in-capmkt:DateOfEndOfReportingPeriod contextRef="OneD">2025-12-31</in-capmkt:DateOfEndOfReportingPeriod>
+<in-capmkt:NatureOfReportStandaloneConsolidated contextRef="OneD">Consolidated</in-capmkt:NatureOfReportStandaloneConsolidated>
+<in-capmkt:RevenueFromOperations contextRef="OneD" unitRef="INR" decimals="-5">694000000000</in-capmkt:RevenueFromOperations>
+<in-capmkt:RevenueFromOperations contextRef="FourD" unitRef="INR" decimals="-5">1401880000000</in-capmkt:RevenueFromOperations>
+<in-capmkt:OtherIncome contextRef="OneD" unitRef="INR" decimals="-5">15300000000</in-capmkt:OtherIncome>
+<in-capmkt:OtherIncome contextRef="FourD" unitRef="INR" decimals="-5">30906000000</in-capmkt:OtherIncome>
+<in-capmkt:Income contextRef="OneD" unitRef="INR" decimals="-5">709300000000</in-capmkt:Income>
+<in-capmkt:Income contextRef="FourD" unitRef="INR" decimals="-5">1432786000000</in-capmkt:Income>
+<in-capmkt:FinanceCosts contextRef="OneD" unitRef="INR" decimals="-5">33000000000</in-capmkt:FinanceCosts>
+<in-capmkt:FinanceCosts contextRef="FourD" unitRef="INR" decimals="-5">66660000000</in-capmkt:FinanceCosts>
+<in-capmkt:DepreciationDepletionAndAmortisationExpense contextRef="OneD" unitRef="INR" decimals="-5">44500000000</in-capmkt:DepreciationDepletionAndAmortisationExpense>
+<in-capmkt:DepreciationDepletionAndAmortisationExpense contextRef="FourD" unitRef="INR" decimals="-5">89890000000</in-capmkt:DepreciationDepletionAndAmortisationExpense>
+<in-capmkt:Expenses contextRef="OneD" unitRef="INR" decimals="-5">581500000000</in-capmkt:Expenses>
+<in-capmkt:Expenses contextRef="FourD" unitRef="INR" decimals="-5">1174630000000</in-capmkt:Expenses>
+<in-capmkt:ProfitBeforeTax contextRef="OneD" unitRef="INR" decimals="-5">127800000000</in-capmkt:ProfitBeforeTax>
+<in-capmkt:ProfitBeforeTax contextRef="FourD" unitRef="INR" decimals="-5">258156000000</in-capmkt:ProfitBeforeTax>
+<in-capmkt:ProfitLossForPeriod contextRef="OneD" unitRef="INR" decimals="-5">95200000000</in-capmkt:ProfitLossForPeriod>
+<in-capmkt:ProfitLossForPeriod contextRef="FourD" unitRef="INR" decimals="-5">192304000000</in-capmkt:ProfitLossForPeriod>
+<in-capmkt:ProfitOrLossAttributableToOwnersOfParent contextRef="OneD" unitRef="INR" decimals="-5">85700000000</in-capmkt:ProfitOrLossAttributableToOwnersOfParent>
+<in-capmkt:ProfitOrLossAttributableToOwnersOfParent contextRef="FourD" unitRef="INR" decimals="-5">173114000000</in-capmkt:ProfitOrLossAttributableToOwnersOfParent>
+<in-capmkt:BasicEarningsLossPerShareFromContinuingAndDiscontinuedOperations contextRef="OneD" unitRef="EPS" decimals="2">12.66</in-capmkt:BasicEarningsLossPerShareFromContinuingAndDiscontinuedOperations>
+<in-capmkt:DilutedEarningsLossPerShareFromContinuingAndDiscontinuedOperations contextRef="OneD" unitRef="EPS" decimals="2">12.66</in-capmkt:DilutedEarningsLossPerShareFromContinuingAndDiscontinuedOperations>
+<in-capmkt:OtherExpenses contextRef="OneOtherExpensesD" unitRef="INR" decimals="-5">9990000000</in-capmkt:OtherExpenses>
+</xbrli:xbrl>
